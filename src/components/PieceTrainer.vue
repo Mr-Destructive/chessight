@@ -478,14 +478,43 @@ onBeforeUnmount(() => {
 
     <div class="hint-row">
       <span>Selected {{ selectedSquares.length }} / {{ drill.legalMoves.length }}</span>
-      <span v-if="supportsKeyboardInput()">{{ answerBuffer ? `Buffer ${answerBuffer}` : inputModeLabel }}</span>
-      <button
-        class="primary-button"
-        type="button"
-        @click="feedback ? nextQuestion() : submitAnswer()"
-      >
-        {{ actionLabel }}
-      </button>
+      <div class="hint-actions">
+        <span v-if="supportsKeyboardInput()">{{ answerBuffer ? `Buffer ${answerBuffer}` : inputModeLabel }}</span>
+        <button
+          v-if="supportsKeyboardInput()"
+          class="ghost-button"
+          type="button"
+          @click="focusKeyboardInput"
+        >
+          Type
+        </button>
+        <button
+          class="primary-button"
+          type="button"
+          @click="feedback ? nextQuestion() : submitAnswer()"
+        >
+          {{ actionLabel }}
+        </button>
+      </div>
+    </div>
+
+    <div v-if="supportsKeyboardInput()" class="keyboard-row">
+      <input
+        ref="keyboardInput"
+        v-model="answerBuffer"
+        class="answer-input"
+        type="text"
+        inputmode="text"
+        autocomplete="off"
+        autocorrect="off"
+        autocapitalize="off"
+        spellcheck="false"
+        placeholder="Type squares like e3 g4"
+        aria-label="Type legal move squares"
+        @focus="focusKeyboardInput"
+        @keydown.enter.prevent="submitAnswer"
+      />
+      <button class="ghost-button" type="button" @click="focusKeyboardInput">Open keyboard</button>
     </div>
 
     <div v-if="resultSummary" class="result-line">

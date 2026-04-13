@@ -674,6 +674,37 @@ button {
   color: var(--muted);
 }
 
+.hint-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.keyboard-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 0.45rem;
+  align-items: center;
+}
+
+.answer-input {
+  width: 100%;
+  min-width: 0;
+  border-radius: 14px;
+  border: 1px solid rgba(23, 32, 42, 0.1);
+  background: rgba(255, 255, 255, 0.78);
+  padding: 0.68rem 0.75rem;
+  color: var(--text);
+  font: inherit;
+  outline: none;
+}
+
+.answer-input::placeholder {
+  color: rgba(103, 112, 122, 0.75);
+}
+
 .result-line {
   padding: 0.5rem 0.7rem;
   border-radius: 14px;
@@ -938,6 +969,11 @@ button {
     flex: 1 1 auto;
   }
 
+  .hint-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
   .prompt {
     font-size: clamp(1rem, 5vw, 1.4rem);
   }
@@ -949,6 +985,15 @@ button {
 
   .select-chip select {
     padding: 0.56rem 0.65rem;
+  }
+
+  .keyboard-row {
+    grid-template-columns: 1fr;
+  }
+
+  .keyboard-row .ghost-button,
+  .keyboard-row .primary-button {
+    width: 100%;
   }
 
   .trainer-stage,

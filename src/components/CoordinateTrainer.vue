@@ -204,6 +204,13 @@ function handleKeyboardSquare(square: Square | null) {
   answerBuffer.value = ''
 }
 
+function submitBufferedGuess() {
+  const square = normalizeSquare(answerBuffer.value)
+  if (!square) return
+  submitGuess(square)
+  answerBuffer.value = ''
+}
+
 function handleKeydown(event: KeyboardEvent) {
   if (completed.value) {
     if (event.key === 'Enter') startSession()
@@ -337,6 +344,27 @@ onBeforeUnmount(() => {
       :locked="locked || completed"
       @select="submitGuess"
     />
+
+    <div class="keyboard-row">
+      <input
+        ref="keyboardInput"
+        v-model="answerBuffer"
+        class="answer-input"
+        type="text"
+        inputmode="text"
+        autocomplete="off"
+        autocorrect="off"
+        autocapitalize="off"
+        spellcheck="false"
+        placeholder="Type square"
+        aria-label="Type the target square"
+        @focus="focusKeyboardInput"
+        @keydown.enter.prevent="submitBufferedGuess"
+      />
+      <button class="ghost-button" type="button" @click="focusKeyboardInput">Open keyboard</button>
+      <button class="primary-button" type="button" @click="submitBufferedGuess">Check</button>
+    </div>
+
     <div class="stat-strip">
       <div class="stat-chip">
         <span>Session</span>
