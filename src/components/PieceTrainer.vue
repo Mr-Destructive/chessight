@@ -183,6 +183,14 @@ function sameSelection(a: Square[], b: Square[]) {
   return [...a].sort().join('|') === [...b].sort().join('|')
 }
 
+function parseAnswerBuffer(raw: string): Square[] {
+  return raw
+    .toLowerCase()
+    .split(/[\s,;]+/)
+    .map((part) => normalizeSquare(part))
+    .filter((square): square is Square => Boolean(square))
+}
+
 function supportsKeyboardInput() {
   return inputMode.value !== 'click'
 }
@@ -233,6 +241,13 @@ function recordAttempt(isCorrect: boolean, responseMs: number) {
 
 function submitAnswer() {
   if (locked.value || completed.value) return
+
+  if (supportsKeyboardInput() && answerBuffer.value.trim()) {
+    const parsed = parseAnswerBuffer(answerBuffer.value)
+    if (parsed.length > 0) {
+      selectedSquares.value = parsed
+    }
+  }
 
   locked.value = true
   const solution = drill.value.legalMoves
@@ -299,6 +314,10 @@ function handleKeydown(event: KeyboardEvent) {
   }
 
   if (key === ' ' || key === ',' || key === ';') {
+    const parsed = parseAnswerBuffer(answerBuffer.value)
+    if (parsed.length > 0) {
+      selectedSquares.value = parsed
+    }
     answerBuffer.value = ''
     event.preventDefault()
     return
@@ -306,13 +325,6 @@ function handleKeydown(event: KeyboardEvent) {
 
   if (/^[a-h1-8]$/.test(key)) {
     answerBuffer.value += key
-    if (answerBuffer.value.length === 2) {
-      const square = normalizeSquare(answerBuffer.value)
-      if (square && !selectedSquares.value.includes(square)) {
-        selectedSquares.value = [...selectedSquares.value, square]
-      }
-      answerBuffer.value = ''
-    }
     event.preventDefault()
   }
 }
@@ -447,7 +459,7 @@ onBeforeUnmount(() => {
     </div>
 
     <div class="micro-copy">
-      {{ inputModeNote }}
+      {{ inputModeNote }} Use spaces, commas, or semicolons between squares.
     </div>
 
     <input
@@ -499,21 +511,21 @@ onBeforeUnmount(() => {
     </div>
 
     <div v-if="supportsKeyboardInput()" class="keyboard-row">
-      <input
-        ref="keyboardInput"
-        v-model="answerBuffer"
-        class="answer-input"
-        type="text"
+        <input
+          ref="keyboardInput"
+          v-model="answerBuffer"
+          class="answer-input"
+          type="text"
         inputmode="text"
-        autocomplete="off"
-        autocorrect="off"
-        autocapitalize="off"
-        spellcheck="false"
-        placeholder="Type squares like e3 g4"
-        aria-label="Type legal move squares"
-        @focus="focusKeyboardInput"
-        @keydown.enter.prevent="submitAnswer"
-      />
+          autocomplete="off"
+          autocorrect="off"
+          autocapitalize="off"
+          spellcheck="false"
+          placeholder="Type squares like e3 g4 or e3, g4"
+          aria-label="Type legal move squares"
+          @focus="focusKeyboardInput"
+          @keydown.enter.prevent="submitAnswer"
+        />
       <button class="ghost-button" type="button" @click="focusKeyboardInput">Open keyboard</button>
     </div>
 
