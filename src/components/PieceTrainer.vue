@@ -4,6 +4,7 @@ import ChessBoard from './ChessBoard.vue'
 import {
   createPieceDrill,
   normalizeSquare,
+  type BoardSide,
   type PieceContext,
   type PieceDrill,
   type PieceType,
@@ -32,11 +33,29 @@ type FeedbackState = {
   wrong: Square[]
   missed: Square[]
   isCorrect: boolean
+  timedOut?: boolean
 } | null
 
 type InputMode = 'click' | 'keyboard' | 'both'
+type TrainingMode = 'normal' | 'timed' | 'rapid'
 
-const SESSION_LENGTH = 10
+const SESSION_LENGTHS: Record<TrainingMode, number> = {
+  normal: 10,
+  timed: 10,
+  rapid: 6,
+}
+
+const QUESTION_LIMITS_MS: Record<TrainingMode, number> = {
+  normal: 0,
+  timed: 15000,
+  rapid: 8000,
+}
+
+const REVEAL_MS: Record<TrainingMode, number> = {
+  normal: 520,
+  timed: 520,
+  rapid: 360,
+}
 
 const props = defineProps<{
   storageKey: string
@@ -54,14 +73,25 @@ const PIECES: Array<{ value: PieceType | 'random'; label: string }> = [
 
 const CONTEXTS: Array<{ value: PieceContext | 'random'; label: string }> = [
   { value: 'random', label: 'Mixed' },
-  { value: 'isolated', label: 'Isolated' },
+  { value: 'isolated', label: 'Open board' },
   { value: 'position', label: 'Position' },
 ]
 
+const PLAY_MODES: Array<{ value: TrainingMode; label: string; note: string }> = [
+  { value: 'normal', label: 'Practice', note: 'No timer' },
+  { value: 'timed', label: 'Timed', note: '15 seconds per round' },
+  { value: 'rapid', label: 'Rapid', note: '8 seconds per round' },
+]
+
 const INPUT_MODES: Array<{ value: InputMode; label: string; note: string }> = [
-  { value: 'keyboard', label: 'Keyboard', note: 'Type squares like e3 g4' },
   { value: 'both', label: 'Both', note: 'Tap or type' },
+  { value: 'keyboard', label: 'Keyboard', note: 'Type squares like e3 g4' },
   { value: 'click', label: 'Tap', note: 'Board only' },
+]
+
+const BOARD_SIDES: Array<{ value: BoardSide; label: string }> = [
+  { value: 'white', label: 'White' },
+  { value: 'black', label: 'Black' },
 ]
 
 const progress = reactive<ProgressState>(loadProgress())
@@ -79,11 +109,17 @@ const locked = ref(false)
 const completed = ref(false)
 const pieceSelection = ref<PieceType | 'random'>('random')
 const contextSelection = ref<PieceContext | 'random'>('random')
-const inputMode = ref<InputMode>('keyboard')
+const playMode = ref<TrainingMode>('normal')
+const boardSide = ref<BoardSide>('white')
+const inputMode = ref<InputMode>('both')
 const answerBuffer = ref('')
 const keyboardInput = ref<HTMLInputElement | null>(null)
+const questionDeadline = ref<number | null>(null)
+const timerNow = ref(Date.now())
 
 let revealTimer: number | undefined
+let questionTimer: number | undefined
+let countdownTicker: number | undefined
 
 function loadProgress(): ProgressState {
   if (typeof window === 'undefined') {
@@ -129,11 +165,43 @@ function saveProgress() {
   window.localStorage.setItem(props.storageKey, JSON.stringify(progress))
 }
 
-function clearTimer() {
-  if (revealTimer) {
+function clearRevealTimer() {
+  if (revealTimer !== undefined) {
     window.clearTimeout(revealTimer)
     revealTimer = undefined
   }
+}
+
+function clearQuestionTimer() {
+  if (questionTimer !== undefined) {
+    window.clearTimeout(questionTimer)
+    questionTimer = undefined
+  }
+
+  if (countdownTicker !== undefined) {
+    window.clearInterval(countdownTicker)
+    countdownTicker = undefined
+  }
+
+  questionDeadline.value = null
+}
+
+function startQuestionTimer() {
+  clearQuestionTimer()
+
+  const limit = QUESTION_LIMITS_MS[playMode.value]
+  if (!limit) return
+
+  questionDeadline.value = Date.now() + limit
+  timerNow.value = Date.now()
+
+  countdownTicker = window.setInterval(() => {
+    timerNow.value = Date.now()
+  }, 200)
+
+  questionTimer = window.setTimeout(() => {
+    handleTimeout()
+  }, limit)
 }
 
 function focusKeyboardInput() {
@@ -142,7 +210,8 @@ function focusKeyboardInput() {
 }
 
 function startDrill() {
-  clearTimer()
+  clearRevealTimer()
+  clearQuestionTimer()
   drill.value = createPieceDrill(pieceSelection.value, contextSelection.value)
   currentIndex.value = 0
   sessionAttempts.value = 0
@@ -156,16 +225,19 @@ function startDrill() {
   selectedSquares.value = []
   answerBuffer.value = ''
   questionStart.value = Date.now()
+  startQuestionTimer()
   void nextTick(focusKeyboardInput)
 }
 
 function nextQuestion() {
+  clearRevealTimer()
+  clearQuestionTimer()
   currentIndex.value += 1
-  if (currentIndex.value >= SESSION_LENGTH) {
+
+  if (currentIndex.value >= sessionLength.value) {
     progress.sessionsCompleted += 1
     saveProgress()
     completed.value = true
-    clearTimer()
     return
   }
 
@@ -175,6 +247,7 @@ function nextQuestion() {
   locked.value = false
   answerBuffer.value = ''
   questionStart.value = Date.now()
+  startQuestionTimer()
   void nextTick(focusKeyboardInput)
 }
 
@@ -197,6 +270,15 @@ function supportsKeyboardInput() {
 
 function supportsTapInput() {
   return inputMode.value !== 'keyboard'
+}
+
+function resolveSelectedSquares() {
+  if (supportsKeyboardInput() && answerBuffer.value.trim()) {
+    const parsed = parseAnswerBuffer(answerBuffer.value)
+    if (parsed.length > 0) return parsed
+  }
+
+  return [...selectedSquares.value]
 }
 
 function recordAttempt(isCorrect: boolean, responseMs: number) {
@@ -239,21 +321,19 @@ function recordAttempt(isCorrect: boolean, responseMs: number) {
   saveProgress()
 }
 
-function submitAnswer() {
+function finalizeAnswer(fromTimeout = false) {
   if (locked.value || completed.value) return
 
-  if (supportsKeyboardInput() && answerBuffer.value.trim()) {
-    const parsed = parseAnswerBuffer(answerBuffer.value)
-    if (parsed.length > 0) {
-      selectedSquares.value = parsed
-    }
-  }
-
+  clearRevealTimer()
+  clearQuestionTimer()
   locked.value = true
+
   const solution = drill.value.legalMoves
-  const selected = [...selectedSquares.value]
+  const selected = resolveSelectedSquares()
   const isCorrect = sameSelection(selected, solution)
-  const responseMs = Date.now() - questionStart.value
+  const responseMs = fromTimeout && QUESTION_LIMITS_MS[playMode.value] > 0
+    ? QUESTION_LIMITS_MS[playMode.value]
+    : Date.now() - questionStart.value
 
   feedback.value = {
     selected,
@@ -261,14 +341,28 @@ function submitAnswer() {
     wrong: selected.filter((square) => !solution.includes(square)),
     missed: solution.filter((square) => !selected.includes(square)),
     isCorrect,
+    timedOut: fromTimeout,
   }
 
   recordAttempt(isCorrect, responseMs)
+
+  revealTimer = window.setTimeout(() => {
+    nextQuestion()
+  }, REVEAL_MS[playMode.value])
+}
+
+function submitAnswer() {
+  finalizeAnswer(false)
+}
+
+function handleTimeout() {
+  finalizeAnswer(true)
 }
 
 function toggleSquare(square: Square) {
   if (locked.value || completed.value || !supportsTapInput()) return
 
+  answerBuffer.value = ''
   const index = selectedSquares.value.indexOf(square)
   if (index >= 0) {
     selectedSquares.value = selectedSquares.value.filter((item) => item !== square)
@@ -294,7 +388,7 @@ function handleKeydown(event: KeyboardEvent) {
   if (!supportsKeyboardInput()) return
 
   const target = event.target as HTMLElement | null
-  if (target && ['SELECT', 'BUTTON'].includes(target.tagName)) return
+  if (target && ['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON'].includes(target.tagName)) return
 
   const key = event.key.toLowerCase()
   if (key === 'enter') {
@@ -328,6 +422,8 @@ function handleKeydown(event: KeyboardEvent) {
     event.preventDefault()
   }
 }
+
+const sessionLength = computed(() => SESSION_LENGTHS[playMode.value])
 
 const sessionAccuracy = computed(() => {
   const attempts = Math.max(1, sessionAttempts.value)
@@ -382,6 +478,14 @@ const promptLabel = computed(() => {
   return completed.value ? 'Drill complete' : `${piece} in a ${context}`
 })
 
+const playModeLabel = computed(
+  () => PLAY_MODES.find((option) => option.value === playMode.value)?.label ?? 'Practice',
+)
+
+const playModeNote = computed(
+  () => PLAY_MODES.find((option) => option.value === playMode.value)?.note ?? '',
+)
+
 const inputModeLabel = computed(() => {
   if (inputMode.value === 'keyboard') return 'Keyboard'
   if (inputMode.value === 'both') return 'Both'
@@ -392,15 +496,22 @@ const inputModeNote = computed(
   () => INPUT_MODES.find((option) => option.value === inputMode.value)?.note ?? '',
 )
 
+const timeLabel = computed(() => {
+  const limit = QUESTION_LIMITS_MS[playMode.value]
+  if (!limit) return 'Unlimited'
+  return `${Math.ceil(Math.max(0, (questionDeadline.value ?? 0) - timerNow.value) / 1000)}s left`
+})
+
 const boardLocked = computed(() => locked.value || completed.value || inputMode.value === 'keyboard')
 
 const actionLabel = computed(() => (feedback.value ? 'Next' : 'Check'))
 
 const resultSummary = computed(() => {
   if (!feedback.value) return ''
+  const prefix = feedback.value.timedOut ? 'Time up. ' : ''
   return feedback.value.isCorrect
-    ? `Correct: ${feedback.value.correct.join(', ')}`
-    : `Missed: ${feedback.value.missed.join(', ')}`
+    ? `${prefix}Correct: ${feedback.value.correct.join(', ')}`
+    : `${prefix}Missed: ${feedback.value.missed.join(', ')}`
 })
 
 onMounted(() => {
@@ -408,12 +519,21 @@ onMounted(() => {
   window.addEventListener('keydown', handleKeydown)
 })
 
+watch([pieceSelection, contextSelection], startDrill)
+
+watch(playMode, () => {
+  startDrill()
+})
+
 watch(inputMode, () => {
-  void nextTick(focusKeyboardInput)
+  if (supportsKeyboardInput()) {
+    void nextTick(focusKeyboardInput)
+  }
 })
 
 onBeforeUnmount(() => {
-  clearTimer()
+  clearRevealTimer()
+  clearQuestionTimer()
   window.removeEventListener('keydown', handleKeydown)
 })
 </script>
@@ -433,8 +553,24 @@ onBeforeUnmount(() => {
 
     <div class="control-row">
       <label class="select-chip">
+        <span>Mode</span>
+        <select v-model="playMode">
+          <option v-for="option in PLAY_MODES" :key="option.value" :value="option.value">
+            {{ option.label }}
+          </option>
+        </select>
+      </label>
+      <label class="select-chip">
+        <span>Side</span>
+        <select v-model="boardSide">
+          <option v-for="option in BOARD_SIDES" :key="option.value" :value="option.value">
+            {{ option.label }}
+          </option>
+        </select>
+      </label>
+      <label class="select-chip">
         <span>Piece</span>
-        <select v-model="pieceSelection" @change="startDrill">
+        <select v-model="pieceSelection">
           <option v-for="option in PIECES" :key="option.value" :value="option.value">
             {{ option.label }}
           </option>
@@ -442,7 +578,7 @@ onBeforeUnmount(() => {
       </label>
       <label class="select-chip">
         <span>Context</span>
-        <select v-model="contextSelection" @change="startDrill">
+        <select v-model="contextSelection">
           <option v-for="option in CONTEXTS" :key="option.value" :value="option.value">
             {{ option.label }}
           </option>
@@ -459,21 +595,8 @@ onBeforeUnmount(() => {
     </div>
 
     <div class="micro-copy">
-      {{ inputModeNote }} Use spaces, commas, or semicolons between squares.
+      {{ playModeNote }} · {{ inputModeNote }} · {{ boardSide === 'white' ? 'White' : 'Black' }} side
     </div>
-
-    <input
-      v-if="supportsKeyboardInput()"
-      ref="keyboardInput"
-      class="keyboard-capture"
-      type="text"
-      inputmode="text"
-      autocomplete="off"
-      autocorrect="off"
-      autocapitalize="off"
-      spellcheck="false"
-      aria-label="Keyboard square input"
-    />
 
     <ChessBoard
       :selected-squares="selectedSquares"
@@ -485,13 +608,17 @@ onBeforeUnmount(() => {
       :enemy-squares="drill.context === 'position' ? drill.enemySquares : []"
       :piece-type="drill.pieceType"
       :locked="boardLocked"
+      :orientation="boardSide"
       @select="toggleSquare"
     />
 
     <div class="hint-row">
       <span>Selected {{ selectedSquares.length }} / {{ drill.legalMoves.length }}</span>
       <div class="hint-actions">
-        <span v-if="supportsKeyboardInput()">{{ answerBuffer ? `Buffer ${answerBuffer}` : inputModeLabel }}</span>
+        <span>{{ timeLabel }}</span>
+        <span v-if="supportsKeyboardInput()">
+          {{ answerBuffer ? `Buffer ${answerBuffer}` : inputModeLabel }}
+        </span>
         <button
           v-if="supportsKeyboardInput()"
           class="ghost-button"
@@ -511,21 +638,21 @@ onBeforeUnmount(() => {
     </div>
 
     <div v-if="supportsKeyboardInput()" class="keyboard-row">
-        <input
-          ref="keyboardInput"
-          v-model="answerBuffer"
-          class="answer-input"
-          type="text"
+      <input
+        ref="keyboardInput"
+        v-model="answerBuffer"
+        class="answer-input"
+        type="text"
         inputmode="text"
-          autocomplete="off"
-          autocorrect="off"
-          autocapitalize="off"
-          spellcheck="false"
-          placeholder="Type squares like e3 g4 or e3, g4"
-          aria-label="Type legal move squares"
-          @focus="focusKeyboardInput"
-          @keydown.enter.prevent="submitAnswer"
-        />
+        autocomplete="off"
+        autocorrect="off"
+        autocapitalize="off"
+        spellcheck="false"
+        placeholder="Type squares like e3 g4 or e3, g4"
+        aria-label="Type legal move squares"
+        @focus="focusKeyboardInput"
+        @keydown.enter.prevent="submitAnswer"
+      />
       <button class="ghost-button" type="button" @click="focusKeyboardInput">Open keyboard</button>
     </div>
 
@@ -536,7 +663,7 @@ onBeforeUnmount(() => {
     <div class="stat-strip">
       <div class="stat-chip">
         <span>Session</span>
-        <strong>{{ sessionAttempts }} / {{ SESSION_LENGTH }}</strong>
+        <strong>{{ sessionAttempts }} / {{ sessionLength }}</strong>
       </div>
       <div class="stat-chip">
         <span>Accuracy</span>
@@ -573,6 +700,10 @@ onBeforeUnmount(() => {
       <div class="stat-chip stat-chip-soft">
         <span>Weak spot</span>
         <strong>{{ weakSpot }}</strong>
+      </div>
+      <div class="stat-chip stat-chip-soft">
+        <span>Mode</span>
+        <strong>{{ playModeLabel }}</strong>
       </div>
     </div>
   </div>

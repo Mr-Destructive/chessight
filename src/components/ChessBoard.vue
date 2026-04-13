@@ -12,6 +12,7 @@ const props = defineProps<{
   friendlySquares?: Square[]
   enemySquares?: Square[]
   locked: boolean
+  orientation?: 'white' | 'black'
 }>()
 
 const emit = defineEmits<{
@@ -29,9 +30,17 @@ const pieceSpriteIds: Record<PieceType, string> = {
 
 const pieceSpriteUrl = `${import.meta.env.BASE_URL}chess-pieces-standard.svg`
 
+const fileOrder = computed(() =>
+  props.orientation === 'black' ? [...files].reverse() : [...files],
+)
+
+const rankOrder = computed(() =>
+  props.orientation === 'black' ? [...ranks].reverse() : [...ranks],
+)
+
 const squares = computed(() =>
-  ranks.flatMap((rank) =>
-    files.map((file) => {
+  rankOrder.value.flatMap((rank) =>
+    fileOrder.value.map((file) => {
       const square = `${file}${rank}` as Square
       return {
         square,

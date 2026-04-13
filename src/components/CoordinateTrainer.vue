@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import ChessBoard from './ChessBoard.vue'
-import { allSquares, isDarkSquare, normalizeSquare, randomSquare, shuffleSquares, type Square } from '../lib/chess'
+import { allSquares, isDarkSquare, randomSquare, shuffleSquares, type BoardSide, type Square } from '../lib/chess'
 
 type SquareStats = {
   attempts: number
@@ -21,13 +21,31 @@ type ProgressState = {
 }
 
 type FeedbackState = {
-  guess: Square
+  guess: Square | null
   correct: Square
   isCorrect: boolean
+  timedOut?: boolean
 } | null
 
-const SESSION_LENGTH = 12
-const REVEAL_MS = 520
+type TrainingMode = 'normal' | 'timed' | 'rapid'
+
+const SESSION_LENGTHS: Record<TrainingMode, number> = {
+  normal: 12,
+  timed: 12,
+  rapid: 8,
+}
+
+const QUESTION_LIMITS_MS: Record<TrainingMode, number> = {
+  normal: 0,
+  timed: 15000,
+  rapid: 8000,
+}
+
+const REVEAL_MS: Record<TrainingMode, number> = {
+  normal: 520,
+  timed: 520,
+  rapid: 360,
+}
 
 const props = defineProps<{
   storageKey: string
@@ -43,13 +61,17 @@ const sessionStreak = ref(0)
 const sessionBestStreak = ref(0)
 const sessionTotalResponseMs = ref(0)
 const questionStart = ref(Date.now())
+const questionDeadline = ref<number | null>(null)
+const timerNow = ref(Date.now())
 const feedback = ref<FeedbackState>(null)
 const locked = ref(false)
 const completed = ref(false)
-const answerBuffer = ref('')
-const keyboardInput = ref<HTMLInputElement | null>(null)
+const playMode = ref<TrainingMode>('normal')
+const boardSide = ref<BoardSide>('white')
 
 let revealTimer: number | undefined
+let questionTimer: number | undefined
+let countdownTicker: number | undefined
 
 function loadProgress(): ProgressState {
   if (typeof window === 'undefined') {
@@ -98,23 +120,52 @@ function saveProgress() {
   window.localStorage.setItem(props.storageKey, JSON.stringify(progress))
 }
 
-function clearTimer() {
-  if (revealTimer) {
+function clearRevealTimer() {
+  if (revealTimer !== undefined) {
     window.clearTimeout(revealTimer)
     revealTimer = undefined
   }
 }
 
-function focusKeyboardInput() {
-  keyboardInput.value?.focus({ preventScroll: true })
+function clearQuestionTimer() {
+  if (questionTimer !== undefined) {
+    window.clearTimeout(questionTimer)
+    questionTimer = undefined
+  }
+
+  if (countdownTicker !== undefined) {
+    window.clearInterval(countdownTicker)
+    countdownTicker = undefined
+  }
+
+  questionDeadline.value = null
+}
+
+function startQuestionTimer() {
+  clearQuestionTimer()
+
+  const limit = QUESTION_LIMITS_MS[playMode.value]
+  if (!limit) return
+
+  questionDeadline.value = Date.now() + limit
+  timerNow.value = Date.now()
+
+  countdownTicker = window.setInterval(() => {
+    timerNow.value = Date.now()
+  }, 200)
+
+  questionTimer = window.setTimeout(() => {
+    handleTimeout()
+  }, limit)
 }
 
 function createSessionQueue(): Square[] {
-  return shuffleSquares(allSquares).slice(0, SESSION_LENGTH)
+  return shuffleSquares(allSquares).slice(0, SESSION_LENGTHS[playMode.value])
 }
 
 function startSession() {
-  clearTimer()
+  clearRevealTimer()
+  clearQuestionTimer()
   sessionQueue.value = createSessionQueue()
   currentIndex.value = 0
   sessionAttempts.value = 0
@@ -127,17 +178,17 @@ function startSession() {
   locked.value = false
   promptSquare.value = sessionQueue.value[0]
   questionStart.value = Date.now()
-  answerBuffer.value = ''
-  void nextTick(focusKeyboardInput)
+  startQuestionTimer()
 }
 
 function nextQuestion() {
+  clearRevealTimer()
+  clearQuestionTimer()
   currentIndex.value += 1
   if (currentIndex.value >= sessionQueue.value.length) {
     progress.sessionsCompleted += 1
     saveProgress()
     completed.value = true
-    clearTimer()
     return
   }
 
@@ -145,8 +196,7 @@ function nextQuestion() {
   questionStart.value = Date.now()
   feedback.value = null
   locked.value = false
-  answerBuffer.value = ''
-  void nextTick(focusKeyboardInput)
+  startQuestionTimer()
 }
 
 function recordAttempt(correct: Square, isCorrect: boolean, responseMs: number) {
@@ -182,6 +232,8 @@ function recordAttempt(correct: Square, isCorrect: boolean, responseMs: number) 
 function submitGuess(square: Square) {
   if (locked.value || completed.value) return
 
+  clearRevealTimer()
+  clearQuestionTimer()
   locked.value = true
   const isCorrect = square === promptSquare.value
   const responseMs = Date.now() - questionStart.value
@@ -191,69 +243,31 @@ function submitGuess(square: Square) {
 
   revealTimer = window.setTimeout(() => {
     nextQuestion()
-  }, REVEAL_MS)
+  }, REVEAL_MS[playMode.value])
 }
 
-function handleKeyboardSquare(square: Square | null) {
-  if (!square) {
-    answerBuffer.value = ''
-    return
-  }
+function handleTimeout() {
+  if (locked.value || completed.value) return
 
-  submitGuess(square)
-  answerBuffer.value = ''
+  clearRevealTimer()
+  clearQuestionTimer()
+  locked.value = true
+
+  const responseMs = QUESTION_LIMITS_MS[playMode.value]
+  feedback.value = {
+    guess: null,
+    correct: promptSquare.value,
+    isCorrect: false,
+    timedOut: true,
+  }
+  recordAttempt(promptSquare.value, false, responseMs)
+
+  revealTimer = window.setTimeout(() => {
+    nextQuestion()
+  }, REVEAL_MS[playMode.value])
 }
 
-function submitBufferedGuess() {
-  const square = normalizeSquare(answerBuffer.value)
-  if (!square) return
-  submitGuess(square)
-  answerBuffer.value = ''
-}
-
-function handleKeydown(event: KeyboardEvent) {
-  if (completed.value) {
-    if (event.key === 'Enter') startSession()
-    return
-  }
-
-  if (feedback.value) {
-    if (event.key === 'Enter' || event.key === ' ') {
-      nextQuestion()
-      event.preventDefault()
-    }
-    return
-  }
-
-  if (event.key === 'Backspace') {
-    answerBuffer.value = ''
-    event.preventDefault()
-    return
-  }
-
-  const key = event.key.toLowerCase()
-
-  if (key === 'enter') {
-    const square = normalizeSquare(answerBuffer.value)
-    if (square) handleKeyboardSquare(square)
-    event.preventDefault()
-    return
-  }
-
-  if (key === ' ' || key === ',' || key === ';') {
-    answerBuffer.value = ''
-    event.preventDefault()
-    return
-  }
-
-  if (/^[a-h1-8]$/.test(key)) {
-    answerBuffer.value += key
-    if (answerBuffer.value.length === 2) {
-      handleKeyboardSquare(normalizeSquare(answerBuffer.value))
-    }
-    event.preventDefault()
-  }
-}
+const sessionLength = computed(() => SESSION_LENGTHS[playMode.value])
 
 const sessionAccuracy = computed(() => {
   const attempts = Math.max(1, sessionAttempts.value)
@@ -302,14 +316,36 @@ const weakSpot = computed(() => {
 
 const targetLabel = computed(() => (completed.value ? 'Drill complete' : `Find ${promptSquare.value}`))
 
+const modeLabel = computed(() => (playMode.value === 'normal' ? 'Practice' : playMode.value === 'timed' ? 'Timed' : 'Rapid'))
+
+const timeLabel = computed(() => {
+  const limit = QUESTION_LIMITS_MS[playMode.value]
+  if (!limit) return 'Unlimited'
+  return `${Math.ceil(Math.max(0, (questionDeadline.value ?? 0) - timerNow.value) / 1000)}s left`
+})
+
+const resultLine = computed(() => {
+  if (!feedback.value) return ''
+  if (feedback.value.timedOut) {
+    return `Time up. Correct: ${feedback.value.correct}`
+  }
+
+  return feedback.value.isCorrect
+    ? `Correct: ${feedback.value.correct}`
+    : `Wrong: ${feedback.value.guess} · Correct: ${feedback.value.correct}`
+})
+
+watch(playMode, () => {
+  startSession()
+})
+
 onMounted(() => {
   startSession()
-  window.addEventListener('keydown', handleKeydown)
 })
 
 onBeforeUnmount(() => {
-  clearTimer()
-  window.removeEventListener('keydown', handleKeydown)
+  clearRevealTimer()
+  clearQuestionTimer()
 })
 </script>
 
@@ -323,52 +359,51 @@ onBeforeUnmount(() => {
       <button class="ghost-button" type="button" @click="startSession">New drill</button>
     </div>
 
-    <input
-      ref="keyboardInput"
-      class="keyboard-capture"
-      type="text"
-      inputmode="text"
-      autocomplete="off"
-      autocorrect="off"
-      autocapitalize="off"
-      spellcheck="false"
-      aria-label="Keyboard square input"
-    />
+    <div class="control-row">
+      <label class="select-chip">
+        <span>Mode</span>
+        <select v-model="playMode">
+          <option value="normal">Practice</option>
+          <option value="timed">Timed</option>
+          <option value="rapid">Rapid</option>
+        </select>
+      </label>
+      <label class="select-chip">
+        <span>Side</span>
+        <select v-model="boardSide">
+          <option value="white">White</option>
+          <option value="black">Black</option>
+        </select>
+      </label>
+    </div>
 
-    <div class="micro-copy">Tap a square or type the answer, then press Enter.</div>
+    <div class="micro-copy">Tap a square. {{ modeLabel }} mode runs on {{ timeLabel }}.</div>
 
     <ChessBoard
-      :selected-squares="feedback ? [feedback.guess] : []"
+      :selected-squares="feedback?.guess ? [feedback.guess] : []"
       :correct-squares="feedback ? [feedback.correct] : []"
-      :wrong-squares="feedback && !feedback.isCorrect ? [feedback.guess] : []"
+      :wrong-squares="feedback && feedback.guess && !feedback.isCorrect ? [feedback.guess] : []"
       :locked="locked || completed"
+      :orientation="boardSide"
       @select="submitGuess"
     />
 
-    <div class="keyboard-row">
-      <input
-        ref="keyboardInput"
-        v-model="answerBuffer"
-        class="answer-input"
-        type="text"
-        inputmode="text"
-        autocomplete="off"
-        autocorrect="off"
-        autocapitalize="off"
-        spellcheck="false"
-        placeholder="Type square like e6"
-        aria-label="Type the target square"
-        @focus="focusKeyboardInput"
-        @keydown.enter.prevent="submitBufferedGuess"
-      />
-      <button class="ghost-button" type="button" @click="focusKeyboardInput">Open keyboard</button>
-      <button class="primary-button" type="button" @click="submitBufferedGuess">Check</button>
+    <div class="hint-row">
+      <span>Round {{ Math.min(currentIndex + 1, sessionLength) }} / {{ sessionLength }}</span>
+      <div class="hint-actions">
+        <span>{{ timeLabel }}</span>
+        <button class="ghost-button" type="button" @click="startSession">Reset</button>
+      </div>
+    </div>
+
+    <div v-if="resultLine" class="result-line">
+      {{ resultLine }}
     </div>
 
     <div class="stat-strip">
       <div class="stat-chip">
         <span>Session</span>
-        <strong>{{ sessionAttempts }} / {{ SESSION_LENGTH }}</strong>
+        <strong>{{ sessionAttempts }} / {{ sessionLength }}</strong>
       </div>
       <div class="stat-chip">
         <span>Accuracy</span>
@@ -395,16 +430,16 @@ onBeforeUnmount(() => {
         <strong>{{ overallAccuracy }}%</strong>
       </div>
       <div class="stat-chip stat-chip-soft">
-        <span>Weak spot</span>
-        <strong>{{ weakSpot }}</strong>
-      </div>
-      <div class="stat-chip stat-chip-soft">
         <span>Avg</span>
         <strong>{{ overallAverage }} ms</strong>
       </div>
       <div class="stat-chip stat-chip-soft">
         <span>Best</span>
         <strong>{{ Math.max(sessionBestStreak, progress.bestStreak) }}</strong>
+      </div>
+      <div class="stat-chip stat-chip-soft">
+        <span>Weak spot</span>
+        <strong>{{ weakSpot }}</strong>
       </div>
     </div>
   </div>

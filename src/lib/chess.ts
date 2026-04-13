@@ -1,5 +1,6 @@
 export const files = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'] as const
 export const ranks = ['8', '7', '6', '5', '4', '3', '2', '1'] as const
+export type BoardSide = 'white' | 'black'
 
 export type Square = `${(typeof files)[number]}${(typeof ranks)[number]}`
 export type PieceType = 'pawn' | 'knight' | 'bishop' | 'rook' | 'queen' | 'king'
