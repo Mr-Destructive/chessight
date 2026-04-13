@@ -63,6 +63,15 @@ button {
   padding: 0.55rem;
 }
 
+.keyboard-capture {
+  position: fixed;
+  left: -9999px;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
 .topbar {
   display: flex;
   align-items: center;
@@ -840,6 +849,27 @@ button {
 }
 
 @media (max-width: 720px) {
+  html,
+  body,
+  #app {
+    min-height: 100%;
+    height: auto;
+  }
+
+  body,
+  #app {
+    overflow-y: auto;
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .app-shell {
+    height: auto;
+    min-height: 100svh;
+    overflow: visible;
+    padding-bottom: 1rem;
+  }
+
   .topbar {
     align-items: flex-start;
     flex-wrap: wrap;
@@ -882,11 +912,30 @@ button {
   }
 
   .trainer {
+    width: 100%;
     gap: 0.6rem;
   }
 
   .prompt-row {
+    flex-wrap: wrap;
     gap: 0.45rem;
+  }
+
+  .prompt-row > div {
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+
+  .prompt-row .ghost-button {
+    margin-left: auto;
+  }
+
+  .hint-row {
+    flex-wrap: wrap;
+  }
+
+  .hint-row > span:first-child {
+    flex: 1 1 auto;
   }
 
   .prompt {
@@ -902,6 +951,15 @@ button {
     padding: 0.56rem 0.65rem;
   }
 
+  .trainer-stage,
+  .profile-stage {
+    overflow: visible;
+  }
+
+  .board {
+    width: min(100%, 92vw, 58svh);
+  }
+
   .stat-strip {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -914,6 +972,12 @@ button {
   .profile-actions {
     width: 100%;
     justify-content: flex-start;
+  }
+
+  .profile-kpis,
+  .profile-grid,
+  .profile-help-grid {
+    grid-template-columns: 1fr 1fr;
   }
 
   .profile-hero-stats,
@@ -1050,5 +1114,21 @@ button {
 
   .profile-kpi strong {
     font-size: 1.25rem;
+  }
+}
+
+@media (max-width: 520px) {
+  .profile-kpis,
+  .profile-grid,
+  .profile-help-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .stat-strip {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .board {
+    width: min(100%, 94vw, 55svh);
   }
 }

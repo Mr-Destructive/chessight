@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import ChessBoard from './ChessBoard.vue'
-import { allSquares, isDarkSquare, randomSquare, shuffleSquares, type Square } from '../lib/chess'
+import { allSquares, isDarkSquare, normalizeSquare, randomSquare, shuffleSquares, type Square } from '../lib/chess'
 
 type SquareStats = {
   attempts: number
@@ -46,6 +46,8 @@ const questionStart = ref(Date.now())
 const feedback = ref<FeedbackState>(null)
 const locked = ref(false)
 const completed = ref(false)
+const answerBuffer = ref('')
+const keyboardInput = ref<HTMLInputElement | null>(null)
 
 let revealTimer: number | undefined
 
@@ -103,6 +105,10 @@ function clearTimer() {
   }
 }
 
+function focusKeyboardInput() {
+  keyboardInput.value?.focus({ preventScroll: true })
+}
+
 function createSessionQueue(): Square[] {
   return shuffleSquares(allSquares).slice(0, SESSION_LENGTH)
 }
@@ -121,6 +127,8 @@ function startSession() {
   locked.value = false
   promptSquare.value = sessionQueue.value[0]
   questionStart.value = Date.now()
+  answerBuffer.value = ''
+  void nextTick(focusKeyboardInput)
 }
 
 function nextQuestion() {
@@ -137,6 +145,8 @@ function nextQuestion() {
   questionStart.value = Date.now()
   feedback.value = null
   locked.value = false
+  answerBuffer.value = ''
+  void nextTick(focusKeyboardInput)
 }
 
 function recordAttempt(correct: Square, isCorrect: boolean, responseMs: number) {
@@ -182,6 +192,60 @@ function submitGuess(square: Square) {
   revealTimer = window.setTimeout(() => {
     nextQuestion()
   }, REVEAL_MS)
+}
+
+function handleKeyboardSquare(square: Square | null) {
+  if (!square) {
+    answerBuffer.value = ''
+    return
+  }
+
+  submitGuess(square)
+  answerBuffer.value = ''
+}
+
+function handleKeydown(event: KeyboardEvent) {
+  if (completed.value) {
+    if (event.key === 'Enter') startSession()
+    return
+  }
+
+  if (feedback.value) {
+    if (event.key === 'Enter' || event.key === ' ') {
+      nextQuestion()
+      event.preventDefault()
+    }
+    return
+  }
+
+  if (event.key === 'Backspace') {
+    answerBuffer.value = ''
+    event.preventDefault()
+    return
+  }
+
+  const key = event.key.toLowerCase()
+
+  if (key === 'enter') {
+    const square = normalizeSquare(answerBuffer.value)
+    if (square) handleKeyboardSquare(square)
+    event.preventDefault()
+    return
+  }
+
+  if (key === ' ' || key === ',' || key === ';') {
+    answerBuffer.value = ''
+    event.preventDefault()
+    return
+  }
+
+  if (/^[a-h1-8]$/.test(key)) {
+    answerBuffer.value += key
+    if (answerBuffer.value.length === 2) {
+      handleKeyboardSquare(normalizeSquare(answerBuffer.value))
+    }
+    event.preventDefault()
+  }
 }
 
 const sessionAccuracy = computed(() => {
@@ -233,10 +297,12 @@ const targetLabel = computed(() => (completed.value ? 'Drill complete' : `Find $
 
 onMounted(() => {
   startSession()
+  window.addEventListener('keydown', handleKeydown)
 })
 
 onBeforeUnmount(() => {
   clearTimer()
+  window.removeEventListener('keydown', handleKeydown)
 })
 </script>
 
@@ -249,6 +315,20 @@ onBeforeUnmount(() => {
       </div>
       <button class="ghost-button" type="button" @click="startSession">New drill</button>
     </div>
+
+    <input
+      ref="keyboardInput"
+      class="keyboard-capture"
+      type="text"
+      inputmode="text"
+      autocomplete="off"
+      autocorrect="off"
+      autocapitalize="off"
+      spellcheck="false"
+      aria-label="Keyboard square input"
+    />
+
+    <div class="micro-copy">Tap a square or type the answer, then press Enter.</div>
 
     <ChessBoard
       :selected-squares="feedback ? [feedback.guess] : []"

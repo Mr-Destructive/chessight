@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import ChessBoard from './ChessBoard.vue'
 import {
   createPieceDrill,
@@ -81,6 +81,7 @@ const pieceSelection = ref<PieceType | 'random'>('random')
 const contextSelection = ref<PieceContext | 'random'>('random')
 const inputMode = ref<InputMode>('keyboard')
 const answerBuffer = ref('')
+const keyboardInput = ref<HTMLInputElement | null>(null)
 
 let revealTimer: number | undefined
 
@@ -135,6 +136,11 @@ function clearTimer() {
   }
 }
 
+function focusKeyboardInput() {
+  if (!supportsKeyboardInput()) return
+  keyboardInput.value?.focus({ preventScroll: true })
+}
+
 function startDrill() {
   clearTimer()
   drill.value = createPieceDrill(pieceSelection.value, contextSelection.value)
@@ -150,6 +156,7 @@ function startDrill() {
   selectedSquares.value = []
   answerBuffer.value = ''
   questionStart.value = Date.now()
+  void nextTick(focusKeyboardInput)
 }
 
 function nextQuestion() {
@@ -168,6 +175,7 @@ function nextQuestion() {
   locked.value = false
   answerBuffer.value = ''
   questionStart.value = Date.now()
+  void nextTick(focusKeyboardInput)
 }
 
 function sameSelection(a: Square[], b: Square[]) {
@@ -388,6 +396,10 @@ onMounted(() => {
   window.addEventListener('keydown', handleKeydown)
 })
 
+watch(inputMode, () => {
+  void nextTick(focusKeyboardInput)
+})
+
 onBeforeUnmount(() => {
   clearTimer()
   window.removeEventListener('keydown', handleKeydown)
@@ -437,6 +449,19 @@ onBeforeUnmount(() => {
     <div class="micro-copy">
       {{ inputModeNote }}
     </div>
+
+    <input
+      v-if="supportsKeyboardInput()"
+      ref="keyboardInput"
+      class="keyboard-capture"
+      type="text"
+      inputmode="text"
+      autocomplete="off"
+      autocorrect="off"
+      autocapitalize="off"
+      spellcheck="false"
+      aria-label="Keyboard square input"
+    />
 
     <ChessBoard
       :selected-squares="selectedSquares"
